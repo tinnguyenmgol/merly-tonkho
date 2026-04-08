@@ -1,19 +1,22 @@
-# 🎈 Blank app template
+# Merly Ton Kho App
 
-A simple Streamlit app template for you to modify!
+Deploy miễn phí bằng Streamlit Community Cloud.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+## Files
+- `app.py`
+- `requirements.txt`
+- `Logo Merly.jpg`
 
-### How to run it on your own machine
+## Deploy
+1. Tạo GitHub repo mới
+2. Upload 3 file trên vào repo
+3. Đăng nhập Streamlit Community Cloud
+4. Chọn repo -> app.py -> Deploy
 
-1. Install the requirements
-
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+## Ghi chú
+- App đọc các cột chuẩn:
+  - Tên hàng hóa
+  - Mã hàng hóa
+  - Số lượng
+  - Giá bán
+  - Nhóm hàng
