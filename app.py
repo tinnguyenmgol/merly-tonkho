@@ -292,16 +292,20 @@ def build_history_insights(hist_group):
     out = []
     tmp = hist_group.copy()
     tmp["Da_ban"] = pd.to_numeric(tmp["Da_ban"], errors="coerce").fillna(0)
-    tmp["Ky_so_sanh"] = tmp["Ngay_file_truoc"].astype(str) + " → " + tmp["Ngay_file_hien_tai"].astype(str)
+    if "Ky_so_sanh" not in tmp.columns:
+        if "Ngay_file_truoc" in tmp.columns and "Ngay_file_hien_tai" in tmp.columns:
+            tmp["Ky_so_sanh"] = tmp["Ngay_file_truoc"].astype(str) + " → " + tmp["Ngay_file_hien_tai"].astype(str)
+        else:
+            return []
     for grp, g in tmp.groupby("Group"):
-        g = g.sort_values(["Ngay_file_truoc", "Ngay_file_hien_tai"]).tail(2)
+        g = g.sort_values("Ky_so_sanh").tail(2)
         if len(g) >= 2:
             vals = g["Da_ban"].tolist()
             diff = vals[-1] - vals[-2]
             if diff >= 5:
-                out.append(f"Nhóm {grp} đang tăng rõ ({vals[-2]} → {vals[-1]}).")
+                out.append(f"Nhóm {grp} đang tăng rõ ({int(vals[-2])} → {int(vals[-1])}).")
             elif diff <= -5:
-                out.append(f"Nhóm {grp} đang giảm rõ ({vals[-2]} → {vals[-1]}).")
+                out.append(f"Nhóm {grp} đang giảm rõ ({int(vals[-2])} → {int(vals[-1])}).")
     return out[:10]
 
 col_logo, col_title = st.columns([1, 4])
