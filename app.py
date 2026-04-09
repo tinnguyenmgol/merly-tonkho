@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Merly - Business AI", layout="wide")
+st.set_page_config(page_title="Merly - Business AI V2", layout="wide")
 
 st.markdown("""
 <style>
@@ -30,6 +30,8 @@ h1, h2, h3 {color: #9d8479;}
 .badge-red {background:#ffd9d9; color:#9b0000;}
 .badge-yellow {background:#fff2cc; color:#8a6d00;}
 .badge-blue {background:#dceeff; color:#0b5cab;}
+.badge-green {background:#ddf6e8; color:#137a45;}
+.small-note {font-size: 12px; color: #7d6a61;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -238,6 +240,42 @@ Hãy trả lời đúng theo 7 phần:
 6. RỦI RO TỒN KHO CẦN CHÚ Ý
 7. KẾ HOẠCH HÀNH ĐỘNG 7 NGÀY"""
 
+def build_ai_prompt_sales_strategy(report_summary, zero_sale, sale_1, sale_2, sale_3, best_color, best_size):
+    return f"""Bạn là trưởng bộ phận vận hành của Merly.
+Hãy phân tích nhóm bán chậm và đề xuất chiến lược xử lý thực dụng.
+
+Báo cáo tóm tắt theo mã + màu:
+{safe_top_records(report_summary, ["Group", "Ma SP", "Mau", "Da_ban", "Phân loại bán", "Đề xuất"], 40)}
+
+Nhóm không bán:
+{safe_top_records(zero_sale, ["Group", "Ma SP", "Mau", "Da_ban", "Đề xuất"], 30)}
+
+Nhóm bán 1 đôi:
+{safe_top_records(sale_1, ["Group", "Ma SP", "Mau", "Da_ban", "Đề xuất"], 30)}
+
+Nhóm bán 2 đôi:
+{safe_top_records(sale_2, ["Group", "Ma SP", "Mau", "Da_ban", "Đề xuất"], 30)}
+
+Nhóm bán 3 đôi:
+{safe_top_records(sale_3, ["Group", "Ma SP", "Mau", "Da_ban", "Đề xuất"], 30)}
+
+Nhóm bán tốt:
+{safe_top_records(best_color, ["Group", "Ma SP", "Mau", "Da_ban", "Ban/ngay"], 20)}
+
+Size bán tốt:
+{safe_top_records(best_size, ["Group", "Ma SP", "Mau", "Size", "Da_ban", "Ban/ngay"], 20)}
+
+Yêu cầu:
+1. Tóm tắt nhanh nhóm bán chậm.
+2. Liệt kê nhóm không bán cần xử lý trước.
+3. Đề xuất chương trình combo.
+4. Đề xuất voucher riêng.
+5. Đề xuất chương trình giảm giá.
+6. Gợi ý mẫu nào không nên giảm mạnh.
+7. Kế hoạch hành động 7 ngày.
+
+Viết ngắn, rõ, hành động được ngay."""
+
 def run_ai_analysis(prompt):
     api_key = None
     try:
@@ -281,6 +319,39 @@ def build_sales_compare(old_file, new_file):
     best_size = sold.groupby(["Group", "Ma SP", "Mau", "Size"], as_index=False)["Da_ban"].sum().sort_values("Da_ban", ascending=False)
     return compare, sold, best_color, best_size
 
+def classify_sale(x):
+    if x == 0:
+        return "Không bán"
+    elif x == 1:
+        return "Bán 1 đôi"
+    elif x == 2:
+        return "Bán 2 đôi"
+    elif x == 3:
+        return "Bán 3 đôi"
+    return "Bán tốt"
+
+def suggest_sale_action(row):
+    sold = int(row["Da_ban"]) if pd.notnull(row["Da_ban"]) else 0
+    if sold == 0:
+        return "Combo / voucher riêng / giảm giá"
+    elif sold == 1:
+        return "Voucher nhẹ + test ảnh"
+    elif sold == 2:
+        return "Đẩy live + seeding"
+    elif sold == 3:
+        return "Scale nhẹ / giữ quan sát"
+    return "Giữ giá / đẩy mạnh"
+
+def build_sales_report(compare):
+    report = compare.groupby(["Group", "Ma SP", "Mau"], as_index=False)["Da_ban"].sum()
+    report["Phân loại bán"] = report["Da_ban"].apply(classify_sale)
+    report["Đề xuất"] = report.apply(suggest_sale_action, axis=1)
+    zero_sale = report[report["Da_ban"] == 0].sort_values(["Group", "Ma SP", "Mau"])
+    sale_1 = report[report["Da_ban"] == 1].sort_values(["Group", "Ma SP", "Mau"])
+    sale_2 = report[report["Da_ban"] == 2].sort_values(["Group", "Ma SP", "Mau"])
+    sale_3 = report[report["Da_ban"] == 3].sort_values(["Group", "Ma SP", "Mau"])
+    return report.sort_values(["Da_ban", "Group", "Ma SP", "Mau"]), zero_sale, sale_1, sale_2, sale_3
+
 def to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, need_import, out_of_stock, best_color, best_size):
     output = BytesIO()
     export_cols = ["Group", "Ma SP", "Mau"] + all_sizes + ["Grand Total"]
@@ -301,8 +372,8 @@ col_logo, col_title = st.columns([1, 4])
 with col_logo:
     st.image("Logo Merly.jpg", width=130)
 with col_title:
-    st.title("Merly - Business AI")
-    st.caption("Bản hard-fix: đã import Path, bỏ kiểu gọi chart gây hiện code lạ, tab 2 có đọc ngày từ tên file và tính ngày tự động.")
+    st.title("Merly - Business AI V2")
+    st.caption("Tab 2 đã nâng cấp: báo cáo nhanh theo mã + màu, phân nhóm bán chậm, và AI gợi ý chiến lược combo/voucher/giảm giá.")
 
 tab1, tab2 = st.tabs(["Tồn kho & Business AI", "Phân tích bán hàng"])
 
@@ -424,7 +495,7 @@ Bối cảnh bổ sung từ người dùng:
         st.markdown('</div>', unsafe_allow_html=True)
 
         excel_file = to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, need_import, out_of_stock, empty_best_color, empty_best_size)
-        st.download_button("Tải file Excel kết quả", data=excel_file, file_name="merly_business_ai_hardfix.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Tải file Excel kết quả", data=excel_file, file_name="merly_business_ai_v2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.info("Hãy tải file Excel tồn kho lên để bắt đầu.")
 
@@ -467,6 +538,37 @@ with tab2:
             m3.metric("Mã + màu bán chạy", f"{len(best_color):,}")
             m4.metric("Bán/ngày", f"{ban_ngay:,.2f}")
 
+            report, zero_sale, sale_1, sale_2, sale_3 = build_sales_report(compare)
+
+            st.subheader("Báo cáo bán hàng nhanh theo mã + màu")
+            st.dataframe(report, use_container_width=True, height=320)
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Không bán", f"{len(zero_sale):,}")
+            k2.metric("Bán 1 đôi", f"{len(sale_1):,}")
+            k3.metric("Bán 2 đôi", f"{len(sale_2):,}")
+            k4.metric("Bán 3 đôi", f"{len(sale_3):,}")
+
+            g1, g2 = st.columns(2)
+            with g1:
+                st.write("Không bán được đôi nào")
+                st.dataframe(zero_sale, use_container_width=True, height=220)
+                st.write("Bán 1 đôi")
+                st.dataframe(sale_1, use_container_width=True, height=220)
+            with g2:
+                st.write("Bán 2 đôi")
+                st.dataframe(sale_2, use_container_width=True, height=220)
+                st.write("Bán 3 đôi")
+                st.dataframe(sale_3, use_container_width=True, height=220)
+
+            st.subheader("Đề xuất xử lý nhóm bán chậm")
+            st.markdown("""
+- Nhóm **không bán**: ưu tiên combo 2 đôi, voucher riêng theo nhóm, flash sale ngắn hạn, ghép chung sản phẩm hot.  
+- Nhóm **bán 1 đôi**: test lại ảnh, caption, giá và voucher nhẹ để kích chuyển đổi.  
+- Nhóm **bán 2–3 đôi**: đẩy live, seeding, tăng hiển thị website/sàn trước khi giảm sâu.  
+- Nhóm **bán tốt**: giữ giá, nhập lại size hot, không giảm mạnh.
+""")
+
             if sold.empty:
                 st.warning("Không suy ra được bán ra giữa 2 file. Có thể 2 file cùng thời điểm, hoặc tồn kho không giảm, hoặc chủ yếu là nhập thêm.")
             else:
@@ -498,16 +600,9 @@ with tab2:
                     else:
                         st.info("Không có dữ liệu.")
 
-                st.subheader("Business AI cho bán hàng")
+                st.subheader("AI gợi ý chiến lược cho nhóm bán chậm")
                 st.markdown('<div class="ai-box">', unsafe_allow_html=True)
-                summary_group_sales = sold.groupby("Group", as_index=False)["Da_ban"].sum().rename(columns={"Da_ban": "Ton kho"})
-                summary_group_sales["Gia tri ton"] = 0
-                summary_ma_sales = sold.groupby(["Group", "Ma SP"], as_index=False)["Da_ban"].sum().rename(columns={"Da_ban": "Ton kho"})
-                summary_ma_sales["Gia tri ton"] = 0
-                need_import_sales = pd.DataFrame(columns=["Group", "Ma SP", "Mau", "Size", "Ton kho", "SL de xuat nhap", "Phan loai"])
-                out_of_stock_sales = pd.DataFrame(columns=["Group", "Ma SP", "Mau", "Size", "Ton kho", "SL de xuat nhap"])
-                sale_df_sales = pd.DataFrame(columns=["Group", "Ma SP", "Mau", "Size", "Ton kho", "Gia tri ton", "Sale priority"])
-                ai_prompt_sales = build_ai_prompt_business(summary_group_sales, summary_ma_sales, need_import_sales, out_of_stock_sales, sale_df_sales, best_color_display, best_size_display)
+                ai_prompt_sales = build_ai_prompt_sales_strategy(report, zero_sale, sale_1, sale_2, sale_3, best_color_display, best_size_display)
                 extra_note_sales = st.text_area("Ghi chú thêm cho AI về tab bán hàng (tuỳ chọn)", height=100, key="sales_ai_note")
                 if st.button("Phân tích bán hàng bằng AI", key="sales_ai_button"):
                     final_prompt_sales = f"""{ai_prompt_sales}
@@ -523,17 +618,22 @@ Bối cảnh bổ sung từ người dùng:
                     else:
                         st.markdown(ai_text_sales)
                 else:
-                    st.caption("Có thể dùng AI để chốt nhanh nhóm hot, mã hot, và hướng nhập hàng / livestream.")
+                    st.caption("AI sẽ đề xuất phương án combo, voucher riêng và giảm giá cho nhóm bán chậm.")
                 st.markdown('</div>', unsafe_allow_html=True)
 
                 sales_xlsx = BytesIO()
                 with pd.ExcelWriter(sales_xlsx, engine="openpyxl") as writer:
                     compare.to_excel(writer, sheet_name="SoSanhChiTiet", index=False)
+                    report.to_excel(writer, sheet_name="BaoCaoNhanh_MaMau", index=False)
+                    zero_sale.to_excel(writer, sheet_name="KhongBan", index=False)
+                    sale_1.to_excel(writer, sheet_name="Ban1Doi", index=False)
+                    sale_2.to_excel(writer, sheet_name="Ban2Doi", index=False)
+                    sale_3.to_excel(writer, sheet_name="Ban3Doi", index=False)
                     sold.to_excel(writer, sheet_name="ChiTietDaBan", index=False)
                     best_color_display.to_excel(writer, sheet_name="BanChay_MaMau", index=False)
                     best_size_display.to_excel(writer, sheet_name="BanChay_MaMauSize", index=False)
                 sales_xlsx.seek(0)
-                st.download_button("Tải file phân tích bán hàng", data=sales_xlsx, file_name="merly_phan_tich_ban_hang.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("Tải file phân tích bán hàng", data=sales_xlsx, file_name="merly_phan_tich_ban_hang_v2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
             st.subheader("Dữ liệu so sánh chi tiết")
             st.dataframe(compare.sort_values(["Da_ban", "Nhap_them"], ascending=[False, False]), use_container_width=True, height=320)
