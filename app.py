@@ -370,8 +370,9 @@ with tab2:
             st.info("Không có dữ liệu bán dương để vẽ biểu đồ.")
 
         st.subheader("Báo cáo bán hàng nhanh theo mã + màu")
-        st.caption("Số âm không được xem là bán tốt.")
-        st.dataframe(report, use_container_width=True, height=320)
+        st.caption("Bảng này chỉ hiển thị mã + màu có biến động khác 0. Số âm không được xem là bán tốt.")
+        report_main = report[report["Da_ban"] != 0].copy()
+        st.dataframe(report_main, use_container_width=True, height=320)
 
         g1, g2 = st.columns(2)
         with g1:
