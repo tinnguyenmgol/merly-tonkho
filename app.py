@@ -303,7 +303,7 @@ with tab1:
         ai_prompt = build_ai_prompt(summary_group, summary_ma, need_import, out_of_stock, sale_df, empty_best_color)
         extra_note = st.text_area("Ghi chú thêm cho AI (tuỳ chọn)", height=80, key="ai_note")
         if st.button("Phân tích bằng AI", key="ai_button"):
-            final_prompt = ai_prompt + ("
+            final_prompt = ai_prompt + ("\n\nGhi chú thêm từ người dùng:\n" + extra_note if extra_note.strip() else "")
 
 Ghi chú thêm từ người dùng:
 " + extra_note if extra_note.strip() else "")
