@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Merly - Business AI V3.1", layout="wide")
+st.set_page_config(page_title="Merly - Business AI V4", layout="wide")
 
 st.markdown("""
 <style>
@@ -25,6 +25,12 @@ h1, h2, h3 {color: #9d8479;}
 .row-alert td {background: #ffd9d9 !important; color: #9b0000; font-weight: 700;}
 .row-low td {background: #fff5cf !important; color: #8a6d00;}
 .total-col {background: #fff2cc; font-weight: 700;}
+.badge-box {margin-top:6px; margin-bottom:6px; display:flex; gap:10px; flex-wrap:wrap;}
+.badge {display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:700;}
+.badge-red {background:#ffd9d9; color:#9b0000;}
+.badge-yellow {background:#fff2cc; color:#8a6d00;}
+.badge-blue {background:#dceeff; color:#0b5cab;}
+.badge-green {background:#ddf6e8; color:#137a45;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,6 +84,113 @@ def parse_date_from_filename(filename):
             except Exception:
                 pass
     return candidates[0] if candidates else None
+
+def classify_ton_kho(qty):
+    qty = int(qty) if pd.notnull(qty) else 0
+    if qty <= 0:
+        return "Hết hàng"
+    if qty <= 1:
+        return "Cần nhập gấp"
+    if qty <= 3:
+        return "Sắp hết"
+    if qty >= 10:
+        return "Tồn cao"
+    return "Bình thường"
+
+def suggested_restock(row):
+    qty = int(row["Ton kho"]) if pd.notnull(row["Ton kho"]) else 0
+    if qty <= 0:
+        return 5
+    if qty == 1:
+        return 4
+    if qty == 2:
+        return 3
+    if qty == 3:
+        return 2
+    return 0
+
+def sale_priority(row):
+    qty = int(row["Ton kho"]) if pd.notnull(row["Ton kho"]) else 0
+    value = float(row["Gia tri ton"]) if pd.notnull(row["Gia tri ton"]) else 0
+    if qty >= 15:
+        return "Ưu tiên sale mạnh"
+    if qty >= 10 or value >= 5000000:
+        return "Có thể chạy sale"
+    return "Chưa cần sale"
+
+def build_pivot_hierarchical(df_clean):
+    df2 = df_clean.copy()
+    df2["Size"] = df2["Size"].astype(str)
+    df2["Ton kho"] = pd.to_numeric(df2["Ton kho"], errors="coerce").fillna(0).astype(int)
+    for c in ["Group", "Ma SP", "Mau"]:
+        df2[c] = df2[c].astype(str).fillna("").str.strip()
+    df2 = df2[df2["Ton kho"] > 0].copy()
+    df2 = df2[(df2["Group"] != "") & (df2["Ma SP"] != "") & (df2["Mau"] != "")].copy()
+    all_sizes = sorted([s for s in df2["Size"].dropna().unique() if str(s).isdigit()], key=lambda x: int(x))
+    if df2.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), all_sizes
+    pivot = pd.pivot_table(df2, index=["Group", "Ma SP", "Mau"], columns="Size", values="Ton kho", aggfunc="sum", fill_value=0)
+    for s in all_sizes:
+        if s not in pivot.columns:
+            pivot[s] = 0
+    pivot = pivot[all_sizes]
+    pivot["Grand Total"] = pivot.sum(axis=1)
+    pivot = pivot[pivot["Grand Total"] > 0].reset_index()
+    group_total = df2.groupby("Group", as_index=False)["Ton kho"].sum().rename(columns={"Ton kho": "Grand Total"})
+    ma_total = df2.groupby(["Group", "Ma SP"], as_index=False)["Ton kho"].sum().rename(columns={"Ton kho": "Grand Total"})
+    return pivot, group_total, ma_total, all_sizes
+
+def render_pivot_html(pivot, group_total, ma_total, all_sizes):
+    if pivot.empty:
+        return '<div class="pivot-wrap"><p style="padding:12px;color:#7c655b;">Không có dữ liệu phù hợp.</p></div>'
+    html = []
+    html.append('<div class="badge-box"><span class="badge badge-red">Tồn = 1</span><span class="badge badge-yellow">Tồn 2–3</span><span class="badge badge-blue">Ẩn ô 0, blank và mã tổng = 0</span></div>')
+    html.append('<div class="pivot-wrap"><table class="pivot-table"><thead><tr><th class="pivot-col-left">Row Labels</th>')
+    for s in all_sizes:
+        html.append(f'<th>{s}</th>')
+    html.append('<th class="total-col">Grand Total</th></tr></thead><tbody>')
+    all_total = 0
+    for group in group_total.sort_values("Group")["Group"].tolist():
+        gsum = int(group_total.loc[group_total["Group"] == group, "Grand Total"].iloc[0])
+        if gsum == 0:
+            continue
+        all_total += gsum
+        gblock = pivot[pivot["Group"] == group].copy()
+        html.append(f'<tr class="group-row"><td class="pivot-col-left">▶ {group}</td>')
+        for s in all_sizes:
+            v = int(gblock[s].sum()) if s in gblock.columns else 0
+            html.append(f'<td>{"" if v == 0 else v}</td>')
+        html.append(f'<td class="total-col">{gsum}</td></tr>')
+        ma_list = ma_total[ma_total["Group"] == group].sort_values("Ma SP")["Ma SP"].tolist()
+        for ma in ma_list:
+            msum_series = ma_total.loc[(ma_total["Group"] == group) & (ma_total["Ma SP"] == ma), "Grand Total"]
+            msum = int(msum_series.iloc[0]) if not msum_series.empty else 0
+            if msum == 0:
+                continue
+            mblock = gblock[gblock["Ma SP"] == ma].copy()
+            html.append(f'<tr class="ma-row"><td class="pivot-col-left">◉ {ma}</td>')
+            for s in all_sizes:
+                v = int(mblock[s].sum()) if s in mblock.columns else 0
+                html.append(f'<td>{"" if v == 0 else v}</td>')
+            html.append(f'<td class="total-col">{msum}</td></tr>')
+            for _, row in mblock[mblock["Grand Total"] > 0].sort_values("Mau").iterrows():
+                gt = int(row["Grand Total"]) if pd.notnull(row["Grand Total"]) else 0
+                row_class = "mau-row"
+                if gt == 1:
+                    row_class += " row-alert"
+                elif 2 <= gt <= 3:
+                    row_class += " row-low"
+                html.append(f'<tr class="{row_class}"><td class="pivot-col-left">{row["Mau"]}</td>')
+                for s in all_sizes:
+                    v = int(row[s]) if s in row.index and pd.notnull(row[s]) else 0
+                    html.append(f'<td>{"" if v == 0 else v}</td>')
+                html.append(f'<td class="total-col">{gt}</td></tr>')
+    html.append('<tr class="group-row"><td class="pivot-col-left">Grand Total</td>')
+    for s in all_sizes:
+        col_total = int(pivot[s].sum()) if s in pivot.columns else 0
+        html.append(f'<td>{"" if col_total == 0 else col_total}</td>')
+    html.append(f'<td class="total-col">{all_total}</td></tr></tbody></table></div>')
+    return "".join(html)
 
 def build_sales_compare(old_file, new_file):
     old_df = process_inventory_file(old_file)[["Ma SP", "Mau", "Size", "Ton kho", "Group"]].copy()
@@ -158,6 +271,7 @@ def save_compare_history(compare_df, old_date, new_date, old_name, new_name):
     save_df["Ngay_file_hien_tai"] = str(new_date)
     save_df["Ten_file_truoc"] = str(old_name)
     save_df["Ten_file_hien_tai"] = str(new_name)
+    save_df["Ky_so_sanh"] = str(old_date) + " → " + str(new_date)
     save_df["Ngay_luu"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if HISTORY_CSV.exists():
         old = pd.read_csv(HISTORY_CSV)
@@ -172,25 +286,47 @@ def load_compare_history():
             return pd.DataFrame()
     return pd.DataFrame()
 
-def summarize_history_by_group(history_df):
-    if history_df.empty:
-        return pd.DataFrame()
-    df = history_df.copy()
-    df["Da_ban"] = pd.to_numeric(df["Da_ban"], errors="coerce").fillna(0)
-    return df.groupby(["Ngay_file_truoc", "Ngay_file_hien_tai", "Group"], as_index=False)["Da_ban"].sum()
+def build_history_insights(hist_group):
+    if hist_group.empty:
+        return []
+    out = []
+    tmp = hist_group.copy()
+    tmp["Da_ban"] = pd.to_numeric(tmp["Da_ban"], errors="coerce").fillna(0)
+    tmp["Ky_so_sanh"] = tmp["Ngay_file_truoc"].astype(str) + " → " + tmp["Ngay_file_hien_tai"].astype(str)
+    for grp, g in tmp.groupby("Group"):
+        g = g.sort_values(["Ngay_file_truoc", "Ngay_file_hien_tai"]).tail(2)
+        if len(g) >= 2:
+            vals = g["Da_ban"].tolist()
+            diff = vals[-1] - vals[-2]
+            if diff >= 5:
+                out.append(f"Nhóm {grp} đang tăng rõ ({vals[-2]} → {vals[-1]}).")
+            elif diff <= -5:
+                out.append(f"Nhóm {grp} đang giảm rõ ({vals[-2]} → {vals[-1]}).")
+    return out[:10]
 
 col_logo, col_title = st.columns([1, 4])
 with col_logo:
     if Path("Logo Merly.jpg").exists():
         st.image("Logo Merly.jpg", width=120)
 with col_title:
-    st.title("Merly - Business AI V3.1")
-    st.caption("Đã sửa logic số âm: âm không còn bị xem là bán tốt. Âm nhẹ = trả hàng/tăng tồn nhẹ, âm lớn = hàng mới về lại.")
+    st.title("Merly - Business AI V4")
+    st.caption("Bản nâng cao: có tab Lịch sử so sánh PRO, biểu đồ xu hướng theo nhóm, bộ lọc group/mã và cảnh báo tăng giảm.")
 
-tab1, tab2 = st.tabs(["Tồn kho & Business AI", "Phân tích bán hàng"])
+tab1, tab2, tab3 = st.tabs(["Tồn kho", "Phân tích bán hàng", "Lịch sử so sánh PRO"])
 
 with tab1:
-    st.info("Bản fix này tập trung sửa tab 2 theo phản hồi của anh. Tab 1 giữ như bản trước.")
+    uploaded_file = st.file_uploader("Tải file Excel tồn kho", type=["xlsx"], key="inventory_file")
+    if uploaded_file:
+        df_clean = process_inventory_file(uploaded_file)
+        df_clean["Phan loai"] = df_clean["Ton kho"].apply(classify_ton_kho)
+        df_clean["Gia tri ton"] = df_clean["Gia Ban"] * df_clean["Ton kho"]
+        df_clean["SL de xuat nhap"] = df_clean.apply(suggested_restock, axis=1)
+        df_clean["Sale priority"] = df_clean.apply(sale_priority, axis=1)
+        st.dataframe(df_clean, use_container_width=True, height=340)
+        pivot_detail, group_total, ma_total, all_sizes = build_pivot_hierarchical(df_clean)
+        st.markdown(render_pivot_html(pivot_detail, group_total, ma_total, all_sizes), unsafe_allow_html=True)
+    else:
+        st.info("Hãy tải file Excel tồn kho lên để bắt đầu.")
 
 with tab2:
     c1, c2, c3, c4 = st.columns(4)
@@ -222,7 +358,7 @@ with tab2:
         m4.metric("Âm lớn (<=-3)", f"{len(negative_heavy):,}")
 
         st.subheader("Biểu đồ bán hàng theo nhóm")
-        st.caption("Biểu đồ này chỉ tính số bán dương. Các dòng âm không được tính là bán.")
+        st.caption("Biểu đồ này chỉ tính số bán dương.")
         group_sales_chart = sold.groupby("Group", as_index=False)["Da_ban"].sum().sort_values("Da_ban", ascending=False)
         if not group_sales_chart.empty:
             st.bar_chart(group_sales_chart.set_index("Group")[["Da_ban"]])
@@ -230,7 +366,7 @@ with tab2:
             st.info("Không có dữ liệu bán dương để vẽ biểu đồ.")
 
         st.subheader("Báo cáo bán hàng nhanh theo mã + màu")
-        st.caption("Lưu ý: số âm không được xem là bán tốt. Âm nhẹ thường là trả hàng/đổi size, âm lớn thường là hàng mới về lại.")
+        st.caption("Số âm không được xem là bán tốt.")
         st.dataframe(report, use_container_width=True, height=320)
 
         g1, g2 = st.columns(2)
@@ -249,28 +385,79 @@ with tab2:
             st.write("Bán 3 đôi")
             st.dataframe(sale_3, use_container_width=True, height=180)
 
-        st.subheader("Đề xuất xử lý")
-        st.markdown("""
-- **Âm nhẹ (-1, -2)**: khả năng là trả hàng / đổi size. Chưa xem là bán chậm.  
-- **Âm lớn (<= -3)**: thường là hàng mới về lại / nhập thêm tồn. Không xếp vào bán tốt hay bán chậm.  
-- **Không bán**: combo, voucher riêng, giảm giá ngắn hạn.  
-- **Bán 1–3 đôi**: test ảnh, caption, live, seeding rồi mới giảm sâu.  
-- **Bán tốt**: giữ giá, đẩy mạnh.
-""")
-
         if st.button("Lưu dữ liệu so sánh này", key="save_history"):
             save_compare_history(compare, date_old, date_new, file_old.name, file_new.name)
             st.success("Đã lưu dữ liệu so sánh.")
 
-        hist = load_compare_history()
-        if not hist.empty:
-            st.subheader("Lịch sử so sánh đã lưu")
-            hist_group = summarize_history_by_group(hist)
-            if not hist_group.empty:
-                group_options = sorted(hist_group["Group"].dropna().astype(str).unique().tolist())
-                selected_group = st.selectbox("Chọn nhóm để xem lịch sử", group_options)
-                gdf = hist_group[hist_group["Group"].astype(str) == str(selected_group)].copy()
-                gdf["Ky_so_sanh"] = gdf["Ngay_file_truoc"].astype(str) + " → " + gdf["Ngay_file_hien_tai"].astype(str)
-                if not gdf.empty:
-                    st.bar_chart(gdf.set_index("Ky_so_sanh")[["Da_ban"]])
-            st.dataframe(hist, use_container_width=True, height=260)
+with tab3:
+    st.subheader("Lịch sử so sánh PRO")
+    history_df = load_compare_history()
+    if history_df.empty:
+        st.info("Chưa có dữ liệu lịch sử. Vào tab 'Phân tích bán hàng' rồi bấm 'Lưu dữ liệu so sánh này'.")
+    else:
+        history_df["Da_ban"] = pd.to_numeric(history_df["Da_ban"], errors="coerce").fillna(0)
+        history_df["Ky_so_sanh"] = history_df["Ngay_file_truoc"].astype(str) + " → " + history_df["Ngay_file_hien_tai"].astype(str)
+
+        f1, f2 = st.columns(2)
+        groups = sorted(history_df["Group"].dropna().astype(str).unique().tolist())
+        masp = sorted(history_df["Ma SP"].dropna().astype(str).unique().tolist())
+        with f1:
+            selected_group = st.selectbox("Lọc theo Group", ["Tất cả"] + groups)
+        with f2:
+            selected_masp = st.selectbox("Lọc theo Mã SP", ["Tất cả"] + masp)
+
+        hist_filtered = history_df.copy()
+        if selected_group != "Tất cả":
+            hist_filtered = hist_filtered[hist_filtered["Group"].astype(str) == selected_group]
+        if selected_masp != "Tất cả":
+            hist_filtered = hist_filtered[hist_filtered["Ma SP"].astype(str) == selected_masp]
+
+        h1, h2, h3 = st.columns(3)
+        h1.metric("Dòng lịch sử", f"{len(hist_filtered):,}")
+        h2.metric("Kỳ so sánh", f"{hist_filtered['Ky_so_sanh'].nunique():,}")
+        h3.metric("Tổng bán dương", f"{int(hist_filtered[hist_filtered['Da_ban']>0]['Da_ban'].sum()):,}")
+
+        hist_group = hist_filtered.groupby(["Ky_so_sanh", "Group"], as_index=False)["Da_ban"].sum().sort_values(["Ky_so_sanh","Da_ban"], ascending=[True,False])
+
+        st.subheader("Biểu đồ xu hướng theo nhóm")
+        if not hist_group.empty:
+            group_for_chart = st.selectbox("Chọn nhóm để xem trend", sorted(hist_group["Group"].dropna().astype(str).unique().tolist()), key="trend_group")
+            gchart = hist_group[hist_group["Group"].astype(str) == str(group_for_chart)].copy()
+            if not gchart.empty:
+                st.bar_chart(gchart.set_index("Ky_so_sanh")[["Da_ban"]])
+        else:
+            st.info("Không có đủ dữ liệu để vẽ trend.")
+
+        st.subheader("Cảnh báo xu hướng")
+        insights = build_history_insights(hist_group)
+        if insights:
+            for item in insights:
+                st.write(f"- {item}")
+        else:
+            st.caption("Chưa đủ dữ liệu để sinh cảnh báo tăng/giảm rõ rệt.")
+
+        st.subheader("So sánh 2 kỳ bất kỳ")
+        periods = sorted(hist_filtered["Ky_so_sanh"].dropna().astype(str).unique().tolist())
+        if len(periods) >= 2:
+            s1, s2 = st.columns(2)
+            with s1:
+                p_old = st.selectbox("Kỳ 1", periods, key="period1")
+            with s2:
+                p_new = st.selectbox("Kỳ 2", periods, index=min(1, len(periods)-1), key="period2")
+            df1 = hist_filtered[hist_filtered["Ky_so_sanh"].astype(str) == p_old].groupby(["Group","Ma SP","Mau"], as_index=False)["Da_ban"].sum().rename(columns={"Da_ban":"Ban_ky_1"})
+            df2 = hist_filtered[hist_filtered["Ky_so_sanh"].astype(str) == p_new].groupby(["Group","Ma SP","Mau"], as_index=False)["Da_ban"].sum().rename(columns={"Da_ban":"Ban_ky_2"})
+            merged = df1.merge(df2, on=["Group","Ma SP","Mau"], how="outer").fillna(0)
+            merged["Chenhlech"] = merged["Ban_ky_2"] - merged["Ban_ky_1"]
+            st.dataframe(merged.sort_values("Chenhlech", ascending=False), use_container_width=True, height=280)
+        else:
+            st.caption("Cần ít nhất 2 kỳ đã lưu để so sánh kỳ.")
+
+        st.subheader("Dữ liệu lịch sử chi tiết")
+        st.dataframe(hist_filtered, use_container_width=True, height=320)
+
+        hist_xlsx = BytesIO()
+        with pd.ExcelWriter(hist_xlsx, engine="openpyxl") as writer:
+            hist_filtered.to_excel(writer, sheet_name="LichSuChiTiet", index=False)
+            hist_group.to_excel(writer, sheet_name="TongHopTheoGroup", index=False)
+        hist_xlsx.seek(0)
+        st.download_button("Tải dữ liệu lịch sử", data=hist_xlsx, file_name="merly_lich_su_so_sanh_v4.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
