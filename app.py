@@ -112,8 +112,10 @@ def render_pivot_html(pivot, ma_total, all_sizes):
     html.append('<table class="pivot-table">')
     html.append("<thead><tr>")
     html.append('<th class="pivot-col-left">Row Labels</th>')
+
     for s in all_sizes:
         html.append(f"<th>{s}</th>")
+
     html.append('<th class="total-col">Grand Total</th>')
     html.append("</tr></thead><tbody>")
 
@@ -125,7 +127,6 @@ def render_pivot_html(pivot, ma_total, all_sizes):
         ma_match = ma_total.loc[ma_total["Ma SP"].astype(str) == ma, "Grand Total"]
         ma_sum = int(ma_match.iloc[0]) if not ma_match.empty else 0
 
-        # bỏ luôn nếu tổng mã = 0
         if ma_sum == 0:
             continue
 
@@ -133,13 +134,14 @@ def render_pivot_html(pivot, ma_total, all_sizes):
 
         html.append('<tr class="ma-row">')
         html.append(f'<td class="pivot-col-left">◉ {ma}</td>')
+
         for s in all_sizes:
             v = int(block[s].sum()) if s in block.columns else 0
             html.append(f'<td>{"" if v == 0 else v}</td>')
+
         html.append(f'<td class="total-col">{ma_sum}</td>')
         html.append("</tr>")
 
-        # chỉ hiện màu nào có Grand Total > 0
         block = block[block["Grand Total"] > 0].copy()
 
         for _, row in block.iterrows():
@@ -174,7 +176,7 @@ def render_pivot_html(pivot, ma_total, all_sizes):
         html.append(f'<td>{"" if col_total == 0 else col_total}</td>')
 
     html.append(f'<td class="total-col">{grand_total_all}</td>')
-    html.append("</tr></tbody></table></div>')
+    html.append("</tr></tbody></table></div>")
 
     return "".join(html)
 
