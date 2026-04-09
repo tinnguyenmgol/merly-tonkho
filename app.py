@@ -1,9 +1,11 @@
 
-import streamlit as st
-import pandas as pd
+import os
 from io import BytesIO
 
-st.set_page_config(page_title="Merly - Tồn kho Pro+", layout="wide")
+import pandas as pd
+import streamlit as st
+
+st.set_page_config(page_title="Merly - Tồn kho Pro AI-ready", layout="wide")
 
 st.markdown("""
 <style>
@@ -27,27 +29,9 @@ small, .stCaption {color: #7d6a61 !important;}
 .badge-red {background:#ffd9d9; color:#9b0000;}
 .badge-yellow {background:#fff2cc; color:#8a6d00;}
 .badge-blue {background:#dceeff; color:#0b5cab;}
-details.pivot-group, details.pivot-ma {margin-bottom:0;}
-details.pivot-group summary, details.pivot-ma summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 0;
-    outline: none;
-}
-details.pivot-group summary::-webkit-details-marker,
-details.pivot-ma summary::-webkit-details-marker {display:none;}
-.kpi-card {background: #fff; border:1px solid #eadfd9; border-radius:14px; padding:14px;}
+.ai-box {background:#fff; border:1px solid #eadfd9; border-radius:14px; padding:16px;}
 </style>
 """, unsafe_allow_html=True)
-
-col_logo, col_title = st.columns([1, 4])
-with col_logo:
-    st.image("Logo Merly.jpg", width=130)
-with col_title:
-    st.title("Merly - Hệ thống phân tích tồn kho Pro+")
-    st.caption("Pivot dạng nhóm giống Excel, có mở/đóng theo Group và Mã SP, ẩn 0 và blank, tô màu theo mức tồn.")
-
-uploaded_file = st.file_uploader("Tải file Excel", type=["xlsx"])
 
 def split_data(text):
     text = str(text).strip()
@@ -68,13 +52,36 @@ def split_data(text):
 
 def classify_ton_kho(qty):
     qty = int(qty) if pd.notnull(qty) else 0
+    if qty <= 0:
+        return "Hết hàng"
     if qty <= 1:
         return "Cần nhập gấp"
-    elif qty <= 3:
+    if qty <= 3:
         return "Sắp hết"
-    elif qty >= 10:
+    if qty >= 10:
         return "Tồn cao"
     return "Bình thường"
+
+def suggested_restock(row):
+    qty = int(row["Ton kho"]) if pd.notnull(row["Ton kho"]) else 0
+    if qty <= 0:
+        return 5
+    if qty == 1:
+        return 4
+    if qty == 2:
+        return 3
+    if qty == 3:
+        return 2
+    return 0
+
+def sale_priority(row):
+    qty = int(row["Ton kho"]) if pd.notnull(row["Ton kho"]) else 0
+    value = float(row["Gia tri ton"]) if pd.notnull(row["Gia tri ton"]) else 0
+    if qty >= 15:
+        return "Ưu tiên sale mạnh"
+    if qty >= 10 or value >= 5000000:
+        return "Có thể chạy sale"
+    return "Chưa cần sale"
 
 def build_pivot_hierarchical(df_clean):
     df2 = df_clean.copy()
@@ -111,7 +118,6 @@ def build_pivot_hierarchical(df_clean):
 
     group_total = df2.groupby("Group", as_index=False)["Ton kho"].sum().rename(columns={"Ton kho":"Grand Total"})
     ma_total = df2.groupby(["Group", "Ma SP"], as_index=False)["Ton kho"].sum().rename(columns={"Ton kho":"Grand Total"})
-
     return pivot, group_total, ma_total, all_sizes
 
 def render_pivot_html(pivot, group_total, ma_total, all_sizes):
@@ -122,19 +128,16 @@ def render_pivot_html(pivot, group_total, ma_total, all_sizes):
     html.append('<div class="badge-box">')
     html.append('<span class="badge badge-red">Tồn = 1</span>')
     html.append('<span class="badge badge-yellow">Tồn 2–3</span>')
-    html.append('<span class="badge badge-blue">Pivot đã ẩn ô 0, blank và mã tổng = 0</span>')
+    html.append('<span class="badge badge-blue">Đã ẩn ô 0, blank và mã tổng = 0</span>')
     html.append('</div>')
-    html.append('<div class="pivot-wrap">')
-    html.append('<table class="pivot-table">')
+    html.append('<div class="pivot-wrap"><table class="pivot-table">')
     html.append('<thead><tr><th class="pivot-col-left">Row Labels</th>')
     for s in all_sizes:
         html.append(f'<th>{s}</th>')
     html.append('<th class="total-col">Grand Total</th></tr></thead><tbody>')
 
     all_grand_total = 0
-    group_list = group_total.sort_values("Group")["Group"].tolist()
-
-    for group in group_list:
+    for group in group_total.sort_values("Group")["Group"].tolist():
         gsum_series = group_total.loc[group_total["Group"] == group, "Grand Total"]
         gsum = int(gsum_series.iloc[0]) if not gsum_series.empty else 0
         if gsum == 0:
@@ -142,9 +145,7 @@ def render_pivot_html(pivot, group_total, ma_total, all_sizes):
         all_grand_total += gsum
 
         gblock = pivot[pivot["Group"] == group].copy()
-        gcols = {}
-        for s in all_sizes:
-            gcols[s] = int(gblock[s].sum()) if s in gblock.columns else 0
+        gcols = {s: int(gblock[s].sum()) if s in gblock.columns else 0 for s in all_sizes}
 
         html.append('<tr class="group-row">')
         html.append(f'<td class="pivot-col-left">▶ {group}</td>')
@@ -160,9 +161,7 @@ def render_pivot_html(pivot, group_total, ma_total, all_sizes):
                 continue
 
             mblock = gblock[gblock["Ma SP"] == ma].copy()
-            mcols = {}
-            for s in all_sizes:
-                mcols[s] = int(mblock[s].sum()) if s in mblock.columns else 0
+            mcols = {s: int(mblock[s].sum()) if s in mblock.columns else 0 for s in all_sizes}
 
             html.append('<tr class="ma-row">')
             html.append(f'<td class="pivot-col-left">◉ {ma}</td>')
@@ -192,21 +191,86 @@ def render_pivot_html(pivot, group_total, ma_total, all_sizes):
         col_total = int(pivot[s].sum()) if s in pivot.columns else 0
         html.append(f'<td>{"" if col_total == 0 else col_total}</td>')
     html.append(f'<td class="total-col">{all_grand_total}</td></tr>')
-
     html.append('</tbody></table></div>')
     return "".join(html)
 
-def to_excel_file(df_clean, pivot_detail, all_sizes, summary_ma, summary_group):
+def to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, need_import, out_of_stock):
     output = BytesIO()
     export_cols = ["Group", "Ma SP", "Mau"] + all_sizes + ["Grand Total"]
     pivot_export = pivot_detail[export_cols].copy()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_clean.to_excel(writer, sheet_name="DuLieuDaTach", index=False)
+        df_all.to_excel(writer, sheet_name="DuLieuDaTach", index=False)
         pivot_export.to_excel(writer, sheet_name="PivotTonKho", index=False)
         summary_ma.to_excel(writer, sheet_name="TongHopTheoMa", index=False)
         summary_group.to_excel(writer, sheet_name="TongHopTheoGroup", index=False)
+        need_import.to_excel(writer, sheet_name="CanNhapThem", index=False)
+        out_of_stock.to_excel(writer, sheet_name="DaHetHang", index=False)
     output.seek(0)
     return output
+
+def build_ai_prompt(summary_group, summary_ma, need_import, out_of_stock, sale_df):
+    sg = summary_group.head(10).to_dict(orient="records")
+    sm = summary_ma.head(15).to_dict(orient="records")
+    ni = need_import.head(20).to_dict(orient="records")
+    oo = out_of_stock.head(20).to_dict(orient="records")
+    sd = sale_df.head(20).to_dict(orient="records")
+    return f'''
+Bạn là trợ lý phân tích tồn kho cho Merly.
+Hãy viết khuyến nghị vận hành ngắn gọn, thực dụng, bằng tiếng Việt.
+
+Dữ liệu tóm tắt theo Group:
+{sg}
+
+Top mã theo tồn:
+{sm}
+
+Danh sách cần nhập thêm:
+{ni}
+
+Danh sách hết hàng:
+{oo}
+
+Danh sách tồn cao/có thể sale:
+{sd}
+
+Hãy trả ra đúng 4 phần:
+1. Tóm tắt nhanh tình hình tồn kho.
+2. 5 ưu tiên nhập hàng trước.
+3. 5 gợi ý chạy sale hoặc đẩy bán.
+4. Rủi ro tồn kho cần chú ý.
+'''.strip()
+
+def run_ai_analysis(prompt):
+    api_key = None
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        api_key = None
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        return None, "Chưa có OPENAI_API_KEY. App đã sẵn sàng để gắn AI, nhưng hiện chưa có key nên chưa gọi được mô hình."
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt
+        )
+        return response.output_text, None
+    except Exception as e:
+        return None, f"Lỗi khi gọi AI: {e}"
+
+# ---------- UI ----------
+col_logo, col_title = st.columns([1, 4])
+with col_logo:
+    st.image("Logo Merly.jpg", width=130)
+with col_title:
+    st.title("Merly - Hệ thống phân tích tồn kho Pro AI-ready")
+    st.caption("Có dashboard, pivot kiểu Excel, gợi ý nhập hàng đầy đủ cả SKU hết hàng, và khu vực sẵn sàng gắn AI.")
+
+uploaded_file = st.file_uploader("Tải file Excel", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
@@ -218,9 +282,12 @@ if uploaded_file:
     df["Gia Ban"] = pd.to_numeric(df.iloc[:,4], errors="coerce").fillna(0)
     df["Ton kho"] = pd.to_numeric(df.iloc[:,2], errors="coerce").fillna(0).astype(int)
     df["Group"] = df.iloc[:,7].astype(str).fillna("")
+
     df_clean = df[["Ma SP","Size","Mau","Gia Ban","Ton kho","Group"]].copy()
     df_clean["Phan loai"] = df_clean["Ton kho"].apply(classify_ton_kho)
     df_clean["Gia tri ton"] = df_clean["Gia Ban"] * df_clean["Ton kho"]
+    df_clean["SL de xuat nhap"] = df_clean.apply(suggested_restock, axis=1)
+    df_clean["Sale priority"] = df_clean.apply(sale_priority, axis=1)
 
     st.markdown('<div class="filter-box">', unsafe_allow_html=True)
     st.subheader("Bộ lọc")
@@ -232,84 +299,107 @@ if uploaded_file:
     with col2:
         selected_masp = st.multiselect("Mã SP", masp, default=masp)
     with col3:
-        selected_status = st.selectbox("Trạng thái", ["Tất cả", "Cần nhập gấp", "Sắp hết", "Bình thường", "Tồn cao"])
+        selected_status = st.selectbox("Trạng thái", ["Tất cả", "Hết hàng", "Cần nhập gấp", "Sắp hết", "Bình thường", "Tồn cao"])
     with col4:
         selected_view = st.selectbox("Hiển thị pivot", ["Tất cả", "Chỉ cần nhập", "Chỉ tồn cao"])
     st.markdown('</div>', unsafe_allow_html=True)
 
-    df_filtered = df_clean.copy()
+    df_base = df_clean.copy()
     if selected_groups:
-        df_filtered = df_filtered[df_filtered["Group"].astype(str).isin(selected_groups)]
+        df_base = df_base[df_base["Group"].astype(str).isin(selected_groups)]
     else:
-        df_filtered = df_filtered.iloc[0:0]
+        df_base = df_base.iloc[0:0]
     if selected_masp:
-        df_filtered = df_filtered[df_filtered["Ma SP"].astype(str).isin(selected_masp)]
+        df_base = df_base[df_base["Ma SP"].astype(str).isin(selected_masp)]
     else:
-        df_filtered = df_filtered.iloc[0:0]
+        df_base = df_base.iloc[0:0]
     if selected_status != "Tất cả":
-        df_filtered = df_filtered[df_filtered["Phan loai"] == selected_status]
+        df_base = df_base[df_base["Phan loai"] == selected_status]
 
+    df_all = df_base.copy()
+    df_pivot = df_base.copy()
     if selected_view == "Chỉ cần nhập":
-        df_filtered = df_filtered[df_filtered["Ton kho"] <= 3]
+        df_pivot = df_pivot[df_pivot["Ton kho"] <= 3]
     elif selected_view == "Chỉ tồn cao":
-        df_filtered = df_filtered[df_filtered["Ton kho"] >= 10]
-
-    df_filtered = df_filtered[df_filtered["Ton kho"] > 0].copy()
+        df_pivot = df_pivot[df_pivot["Ton kho"] >= 10]
+    df_pivot = df_pivot[df_pivot["Ton kho"] > 0].copy()
 
     st.subheader("Tổng quan nhanh")
     a, b, c, d = st.columns(4)
-    a.metric("Tổng biến thể", f"{len(df_filtered):,}")
-    b.metric("Tổng mã SP", f"{df_filtered['Ma SP'].nunique():,}")
-    c.metric("Tổng tồn kho", f"{int(df_filtered['Ton kho'].sum()) if not df_filtered.empty else 0:,}")
-    d.metric("Giá trị tồn", f"{float(df_filtered['Gia tri ton'].sum()) if not df_filtered.empty else 0:,.0f}")
-    e, f, g = st.columns(3)
-    e.metric("Cần nhập gấp", f"{len(df_filtered[df_filtered['Ton kho'] <= 1]):,}")
-    f.metric("Sắp hết", f"{len(df_filtered[(df_filtered['Ton kho'] > 1) & (df_filtered['Ton kho'] <= 3)]):,}")
-    g.metric("Tồn cao", f"{len(df_filtered[df_filtered['Ton kho'] >= 10]):,}")
+    a.metric("Tổng biến thể", f"{len(df_all):,}")
+    b.metric("Tổng mã SP", f"{df_all['Ma SP'].nunique():,}")
+    c.metric("Tổng tồn kho", f"{int(df_all['Ton kho'].sum()) if not df_all.empty else 0:,}")
+    d.metric("Giá trị tồn", f"{float(df_all['Gia tri ton'].sum()) if not df_all.empty else 0:,.0f}")
+    e, f, g, h = st.columns(4)
+    e.metric("Hết hàng", f"{len(df_all[df_all['Ton kho'] == 0]):,}")
+    f.metric("Cần nhập gấp", f"{len(df_all[df_all['Ton kho'] <= 1]):,}")
+    g.metric("Sắp hết", f"{len(df_all[(df_all['Ton kho'] > 1) & (df_all['Ton kho'] <= 3)]):,}")
+    h.metric("Tồn cao", f"{len(df_all[df_all['Ton kho'] >= 10]):,}")
 
     st.subheader("Dashboard phân tích")
     c1, c2 = st.columns(2)
     with c1:
         st.write("Tồn kho theo nhóm sản phẩm")
-        group_chart = df_filtered.groupby("Group", as_index=False)["Ton kho"].sum().sort_values("Ton kho", ascending=False).set_index("Group")
+        group_chart = df_all.groupby("Group", as_index=False)["Ton kho"].sum().sort_values("Ton kho", ascending=False).set_index("Group")
         if not group_chart.empty:
             st.bar_chart(group_chart)
         else:
             st.info("Không có dữ liệu.")
     with c2:
         st.write("Top 10 mã tồn cao")
-        ma_chart = df_filtered.groupby("Ma SP", as_index=False)["Ton kho"].sum().sort_values("Ton kho", ascending=False).head(10).set_index("Ma SP")
+        ma_chart = df_all.groupby("Ma SP", as_index=False)["Ton kho"].sum().sort_values("Ton kho", ascending=False).head(10).set_index("Ma SP")
         if not ma_chart.empty:
             st.bar_chart(ma_chart)
         else:
             st.info("Không có dữ liệu.")
 
-    summary_ma = df_filtered.groupby(["Group","Ma SP"], as_index=False).agg({"Ton kho":"sum","Gia tri ton":"sum"}).sort_values(["Ton kho","Gia tri ton"], ascending=[False, False])
-    summary_group = df_filtered.groupby("Group", as_index=False).agg({"Ton kho":"sum","Gia tri ton":"sum"}).sort_values(["Ton kho","Gia tri ton"], ascending=[False, False])
+    summary_ma = df_all.groupby(["Group","Ma SP"], as_index=False).agg({"Ton kho":"sum","Gia tri ton":"sum"}).sort_values(["Ton kho","Gia tri ton"], ascending=[False, False])
+    summary_group = df_all.groupby("Group", as_index=False).agg({"Ton kho":"sum","Gia tri ton":"sum"}).sort_values(["Ton kho","Gia tri ton"], ascending=[False, False])
 
     st.subheader("Top mã cần chú ý")
     st.dataframe(summary_ma.head(20), use_container_width=True, height=300)
 
-    st.subheader("Pivot tồn kho xịn hơn")
-    st.caption("Đã thêm cấp Group → Mã SP → Màu, ẩn blank, ẩn ô 0, ẩn tổng = 0, tô đỏ tồn = 1, tô vàng tồn 2–3.")
-    pivot_detail, group_total, ma_total, all_sizes = build_pivot_hierarchical(df_filtered)
+    st.subheader("Pivot tồn kho")
+    st.caption("Pivot dùng dữ liệu Ton kho > 0 để gọn. Bảng gợi ý nhập hàng bên dưới vẫn giữ đủ cả SKU hết hàng.")
+    pivot_detail, group_total, ma_total, all_sizes = build_pivot_hierarchical(df_pivot)
     st.markdown(render_pivot_html(pivot_detail, group_total, ma_total, all_sizes), unsafe_allow_html=True)
 
     st.subheader("Dữ liệu đã tách")
-    st.dataframe(df_filtered[["Ma SP","Size","Mau","Gia Ban","Ton kho","Group","Phan loai","Gia tri ton"]], use_container_width=True, height=320)
+    st.dataframe(df_all[["Ma SP","Size","Mau","Gia Ban","Ton kho","Group","Phan loai","Gia tri ton","SL de xuat nhap","Sale priority"]], use_container_width=True, height=320)
 
     st.subheader("Gợi ý hành động")
     x1, x2 = st.columns(2)
+    need_import = df_all[df_all["Ton kho"] <= 2].sort_values(["Ton kho","Group","Ma SP","Mau","Size"])
+    sale_df = df_all[df_all["Ton kho"] >= 10].sort_values(["Ton kho","Gia tri ton"], ascending=[False, False])
     with x1:
         st.write("Danh sách cần nhập thêm")
-        need_import = df_filtered[df_filtered["Ton kho"] <= 2].sort_values(["Ton kho","Group","Ma SP","Mau","Size"])
-        st.dataframe(need_import, use_container_width=True, height=320)
+        st.dataframe(need_import[["Ma SP","Size","Mau","Ton kho","SL de xuat nhap","Group","Phan loai"]], use_container_width=True, height=320)
     with x2:
         st.write("Danh sách nên cân nhắc chạy sale")
-        sale_df = df_filtered[df_filtered["Ton kho"] >= 10].sort_values(["Ton kho","Gia tri ton"], ascending=[False, False])
-        st.dataframe(sale_df, use_container_width=True, height=320)
+        st.dataframe(sale_df[["Ma SP","Size","Mau","Ton kho","Gia tri ton","Group","Sale priority"]], use_container_width=True, height=320)
 
-    excel_file = to_excel_file(df_filtered, pivot_detail, all_sizes, summary_ma, summary_group)
-    st.download_button("Tải file Excel kết quả", data=excel_file, file_name="merly_tonkho_pro_plus.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.subheader("SKU đã hết hàng")
+    out_of_stock = df_all[df_all["Ton kho"] == 0].sort_values(["Group","Ma SP","Mau","Size"])
+    st.dataframe(out_of_stock[["Ma SP","Size","Mau","Gia Ban","Ton kho","Group","SL de xuat nhap"]], use_container_width=True, height=280)
+
+    st.subheader("AI gợi ý hành động")
+    st.markdown('<div class="ai-box">', unsafe_allow_html=True)
+    ai_prompt = build_ai_prompt(summary_group, summary_ma, need_import, out_of_stock, sale_df)
+    extra_note = st.text_area("Ghi chú thêm cho AI (tuỳ chọn)", placeholder="Ví dụ: ưu tiên nhập nhóm dép sục trong tuần này, chưa muốn sale cao gót...", height=80)
+    if st.button("Phân tích bằng AI"):
+        final_prompt = ai_prompt + ("\n\nGhi chú thêm từ người dùng:\n" + extra_note if extra_note.strip() else "")
+        with st.spinner("Đang phân tích..."):
+            ai_text, ai_error = run_ai_analysis(final_prompt)
+        if ai_error:
+            st.warning(ai_error)
+            st.code(final_prompt, language="text")
+        else:
+            st.markdown(ai_text)
+    else:
+        st.caption("App đã AI-ready. Chỉ cần thêm OPENAI_API_KEY vào Secrets của Streamlit là dùng được nút phân tích.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    excel_file = to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, need_import, out_of_stock)
+    st.download_button("Tải file Excel kết quả", data=excel_file, file_name="merly_tonkho_pro_ai_ready.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 else:
     st.info("Hãy tải file Excel lên để bắt đầu.")
