@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Merly - Business AI V2", layout="wide")
+st.set_page_config(page_title="Merly - Business AI V3", layout="wide")
 
 st.markdown("""
 <style>
@@ -34,6 +34,11 @@ h1, h2, h3 {color: #9d8479;}
 .small-note {font-size: 12px; color: #7d6a61;}
 </style>
 """, unsafe_allow_html=True)
+
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+HISTORY_CSV = DATA_DIR / "sales_compare_history.csv"
 
 def split_data(text):
     text = str(text).strip()
@@ -352,6 +357,35 @@ def build_sales_report(compare):
     sale_3 = report[report["Da_ban"] == 3].sort_values(["Group", "Ma SP", "Mau"])
     return report.sort_values(["Da_ban", "Group", "Ma SP", "Mau"]), zero_sale, sale_1, sale_2, sale_3
 
+def save_compare_history(compare_df, old_date, new_date, old_name, new_name):
+    if compare_df.empty:
+        return
+    save_df = compare_df.copy()
+    save_df["Ngay_file_truoc"] = str(old_date)
+    save_df["Ngay_file_hien_tai"] = str(new_date)
+    save_df["Ten_file_truoc"] = str(old_name)
+    save_df["Ten_file_hien_tai"] = str(new_name)
+    save_df["Ngay_luu"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if HISTORY_CSV.exists():
+        old = pd.read_csv(HISTORY_CSV)
+        save_df = pd.concat([old, save_df], ignore_index=True)
+    save_df.to_csv(HISTORY_CSV, index=False, encoding="utf-8-sig")
+
+def load_compare_history():
+    if HISTORY_CSV.exists():
+        try:
+            return pd.read_csv(HISTORY_CSV)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def summarize_history_by_group(history_df):
+    if history_df.empty:
+        return pd.DataFrame()
+    df = history_df.copy()
+    df["Da_ban"] = pd.to_numeric(df["Da_ban"], errors="coerce").fillna(0)
+    return df.groupby(["Ngay_file_truoc", "Ngay_file_hien_tai", "Group"], as_index=False)["Da_ban"].sum()
+
 def to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, need_import, out_of_stock, best_color, best_size):
     output = BytesIO()
     export_cols = ["Group", "Ma SP", "Mau"] + all_sizes + ["Grand Total"]
@@ -370,12 +404,13 @@ def to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, ne
 
 col_logo, col_title = st.columns([1, 4])
 with col_logo:
-    st.image("Logo Merly.jpg", width=130)
+    if Path("Logo Merly.jpg").exists():
+        st.image("Logo Merly.jpg", width=130)
 with col_title:
-    st.title("Merly - Business AI V2")
-    st.caption("Tab 2 đã nâng cấp: báo cáo nhanh theo mã + màu, phân nhóm bán chậm, và AI gợi ý chiến lược combo/voucher/giảm giá.")
+    st.title("Merly - Business AI V3")
+    st.caption("Đã thêm biểu đồ bán hàng theo nhóm và chức năng lưu lịch sử so sánh để dùng tiếp về sau.")
 
-tab1, tab2 = st.tabs(["Tồn kho & Business AI", "Phân tích bán hàng"])
+tab1, tab2, tab3 = st.tabs(["Tồn kho & Business AI", "Phân tích bán hàng", "Lịch sử so sánh"])
 
 with tab1:
     uploaded_file = st.file_uploader("Tải file Excel tồn kho", type=["xlsx"], key="inventory_file")
@@ -495,7 +530,7 @@ Bối cảnh bổ sung từ người dùng:
         st.markdown('</div>', unsafe_allow_html=True)
 
         excel_file = to_excel_file(df_all, pivot_detail, all_sizes, summary_ma, summary_group, need_import, out_of_stock, empty_best_color, empty_best_size)
-        st.download_button("Tải file Excel kết quả", data=excel_file, file_name="merly_business_ai_v2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Tải file Excel kết quả", data=excel_file, file_name="merly_business_ai_v3.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.info("Hãy tải file Excel tồn kho lên để bắt đầu.")
 
@@ -528,7 +563,6 @@ with tab2:
     if file_old and file_new:
         try:
             compare, sold, best_color, best_size = build_sales_compare(file_old, file_new)
-
             tong_ban = int(sold["Da_ban"].sum()) if not sold.empty else 0
             ban_ngay = tong_ban / period_days if period_days else 0
 
@@ -537,6 +571,13 @@ with tab2:
             m2.metric("Tổng lượng bán suy ra", f"{tong_ban:,}")
             m3.metric("Mã + màu bán chạy", f"{len(best_color):,}")
             m4.metric("Bán/ngày", f"{ban_ngay:,.2f}")
+
+            st.subheader("Biểu đồ bán hàng theo nhóm")
+            group_sales_chart = compare.groupby("Group", as_index=False)["Da_ban"].sum().sort_values("Da_ban", ascending=False)
+            if not group_sales_chart.empty:
+                st.bar_chart(group_sales_chart.set_index("Group")[["Da_ban"]])
+            else:
+                st.info("Không có dữ liệu biểu đồ theo nhóm.")
 
             report, zero_sale, sale_1, sale_2, sale_3 = build_sales_report(compare)
 
@@ -568,6 +609,14 @@ with tab2:
 - Nhóm **bán 2–3 đôi**: đẩy live, seeding, tăng hiển thị website/sàn trước khi giảm sâu.  
 - Nhóm **bán tốt**: giữ giá, nhập lại size hot, không giảm mạnh.
 """)
+
+            save_col1, save_col2 = st.columns([1,2])
+            with save_col1:
+                if st.button("Lưu dữ liệu so sánh này", key="save_compare_history"):
+                    save_compare_history(compare, date_old, date_new, file_old.name, file_new.name)
+                    st.success("Đã lưu dữ liệu so sánh vào lịch sử.")
+            with save_col2:
+                st.caption("Dữ liệu đã lưu sẽ dùng lại ở tab 'Lịch sử so sánh' để xem xu hướng và so sánh tiếp về sau.")
 
             if sold.empty:
                 st.warning("Không suy ra được bán ra giữa 2 file. Có thể 2 file cùng thời điểm, hoặc tồn kho không giảm, hoặc chủ yếu là nhập thêm.")
@@ -633,7 +682,7 @@ Bối cảnh bổ sung từ người dùng:
                     best_color_display.to_excel(writer, sheet_name="BanChay_MaMau", index=False)
                     best_size_display.to_excel(writer, sheet_name="BanChay_MaMauSize", index=False)
                 sales_xlsx.seek(0)
-                st.download_button("Tải file phân tích bán hàng", data=sales_xlsx, file_name="merly_phan_tich_ban_hang_v2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("Tải file phân tích bán hàng", data=sales_xlsx, file_name="merly_phan_tich_ban_hang_v3.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
             st.subheader("Dữ liệu so sánh chi tiết")
             st.dataframe(compare.sort_values(["Da_ban", "Nhap_them"], ascending=[False, False]), use_container_width=True, height=320)
@@ -642,3 +691,33 @@ Bối cảnh bổ sung từ người dùng:
             st.error(f"Lỗi khi so sánh 2 file: {e}")
     else:
         st.info("Hãy tải đủ 2 file để bắt đầu.")
+
+with tab3:
+    st.subheader("Lịch sử so sánh đã lưu")
+    history_df = load_compare_history()
+    if history_df.empty:
+        st.info("Chưa có dữ liệu lịch sử. Vào tab 'Phân tích bán hàng' rồi bấm 'Lưu dữ liệu so sánh này'.")
+    else:
+        st.metric("Số dòng lịch sử", f"{len(history_df):,}")
+        hist_group = summarize_history_by_group(history_df)
+        st.write("Biểu đồ xu hướng bán theo nhóm từ dữ liệu đã lưu")
+        if not hist_group.empty:
+            hist_group["Ky_so_sanh"] = hist_group["Ngay_file_truoc"].astype(str) + " → " + hist_group["Ngay_file_hien_tai"].astype(str)
+            selected_group = st.selectbox("Chọn nhóm để xem lịch sử", sorted(hist_group["Group"].dropna().astype(str).unique().tolist()))
+            group_hist = hist_group[hist_group["Group"].astype(str) == str(selected_group)].copy()
+            if not group_hist.empty:
+                group_hist = group_hist.sort_values("Ky_so_sanh")
+                st.bar_chart(group_hist.set_index("Ky_so_sanh")[["Da_ban"]])
+            st.dataframe(hist_group.sort_values(["Ky_so_sanh", "Da_ban"], ascending=[True, False]), use_container_width=True, height=300)
+        else:
+            st.info("Lịch sử hiện chưa đủ dữ liệu để vẽ biểu đồ nhóm.")
+        st.subheader("Dữ liệu lịch sử chi tiết")
+        st.dataframe(history_df, use_container_width=True, height=340)
+
+        hist_xlsx = BytesIO()
+        with pd.ExcelWriter(hist_xlsx, engine="openpyxl") as writer:
+            history_df.to_excel(writer, sheet_name="LichSuChiTiet", index=False)
+            if not hist_group.empty:
+                hist_group.to_excel(writer, sheet_name="TongHopTheoGroup", index=False)
+        hist_xlsx.seek(0)
+        st.download_button("Tải dữ liệu lịch sử", data=hist_xlsx, file_name="merly_lich_su_so_sanh.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
